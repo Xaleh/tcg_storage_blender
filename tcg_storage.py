@@ -75,14 +75,20 @@ class Params:
         self.handle_ramp = 16.0   # rampa inferior a 45 graus (auto-sustentavel)
 
         # --- porta-etiqueta na frente da gaveta ------------------------------
-        # Bolso passante: a etiqueta entra pelo lado de dentro da gaveta e fica
-        # presa pela moldura frontal (as cartas a empurram contra a moldura).
+        # Bolso saliente, aplicado sobre a frente da gaveta (nao a atravessa).
+        # Tem paredes nas laterais e embaixo e fica aberto em cima: o token
+        # desce por ali e a moldura frontal o segura. Aberto em cima nao ha
+        # nenhuma ponte para imprimir.
         self.label = True         # criar o porta-etiqueta
-        self.label_w = 56.0       # largura do bolso
-        self.label_h = 16.0       # altura do bolso
-        self.label_front = 1.2    # espessura da moldura frontal
-        self.label_lip = 2.0      # quanto a moldura cobre a etiqueta por lado
-        self.label_clear = 0.3    # folga da etiqueta no bolso (total)
+        self.label_w = 56.0       # largura util do bolso
+        self.label_h = 16.0       # altura util do bolso
+        self.label_out = 2.6      # quanto o bolso avanca da frente da gaveta
+        self.label_front = 0.8    # espessura da moldura frontal
+        self.label_rim = 1.6      # espessura das paredes laterais e do fundo
+        self.label_lip = 2.0      # quanto a moldura cobre o token por lado
+        self.label_clear = 0.3    # folga do token no bolso (total)
+        self.label_grip = 2.0     # quanto o token sobra acima do bolso, para
+                                  # dar onde pegar na hora de trocar (0 = rente)
         self.label_z = None       # cota do centro (None = automatico)
 
         # --- token de etiqueta ----------------------------------------------
@@ -164,9 +170,14 @@ class Params:
         return b0 + self.face_gap, b1 - self.face_gap
 
     @property
-    def label_depth(self):
-        """Profundidade do bolso, medida a partir do verso da frente."""
-        return self.d_face - self.label_front
+    def label_slot(self):
+        """Profundidade do vao do token, medida a partir da frente da gaveta."""
+        return self.label_out - self.label_front
+
+    @property
+    def label_box_w(self):
+        """Largura externa do bolso."""
+        return self.label_w + 2.0 * self.label_rim
 
     @property
     def token_w(self):
@@ -178,8 +189,21 @@ class Params:
 
     @property
     def token_t(self):
-        """Espessura do token: fica 0,2 mm mais raso que o bolso."""
-        return self.label_depth - 0.2
+        """Espessura do token: fica 0,2 mm mais raso que o vao."""
+        return self.label_slot - 0.2
+
+    @property
+    def label_wall_h(self):
+        """Altura das paredes do bolso, contada a partir da base do vao.
+
+        Fica `label_grip` abaixo do topo do token, para sobrar onde pegar.
+        """
+        return self.token_h - self.label_grip
+
+    @property
+    def label_box_h(self):
+        """Altura externa do bolso (sem parede em cima: entrada do token)."""
+        return self.label_wall_h + self.label_rim
 
     def face_span_local(self, level):
         """`face_span` nas coordenadas locais da gaveta (fundo da bandeja = 0)."""
@@ -194,27 +218,29 @@ class Params:
         return ht, top, top - ht - self.handle_ramp
 
     def label_center_z(self, level=0):
-        """Cota local do centro do porta-etiqueta: meio da area livre abaixo
-        do puxador."""
+        """Cota local do centro do vao do token: meio da area livre abaixo do
+        puxador, descontando a parede de baixo do bolso."""
         if self.label_z is not None:
             return self.label_z
         fz0, fz1 = self.face_span_local(level)
         _, _, handle_bottom = self.handle_span(fz0, fz1)
-        return (fz0 + handle_bottom) / 2.0
+        return (fz0 + handle_bottom) / 2.0 + self.label_rim / 2.0
 
     def label_fits(self, level=0):
         """(cabe?, motivo) - confere se o bolso cabe na frente desta gaveta."""
         fz0, fz1 = self.face_span_local(level)
         _, _, handle_bottom = self.handle_span(fz0, fz1)
         free = handle_bottom - fz0
-        if self.label_w + 8.0 > self.shell_w - 2 * self.face_gap:
+        if self.label_box_w + 4.0 > self.shell_w - 2 * self.face_gap:
             return False, "largura da frente insuficiente"
-        if self.label_h + 4.0 > free:
+        if self.label_box_h + 2.0 > free:
             return False, "altura livre abaixo do puxador insuficiente"
-        if self.label_front < 0.8:
+        if self.label_front < 0.6:
             return False, "moldura frontal fina demais"
         if self.label_lip < 1.0:
             return False, "aba da moldura pequena demais"
+        if self.label_slot <= 0.8:
+            return False, "vao do token raso demais"
         return True, ""
 
     def groove_centers_top(self):
@@ -478,7 +504,7 @@ def build_drawer(p, level=0, name=None):
     if p.label:
         ok, why = p.label_fits(level)
         if ok:
-            _cut_label_pocket(p, tray, level)
+            boolean(tray, _label_pocket(p, level), "UNION")
         else:
             print(f"  aviso: porta-etiqueta omitido em {name} ({why})")
 
@@ -486,32 +512,44 @@ def build_drawer(p, level=0, name=None):
     return tray
 
 
-def _cut_label_pocket(p, drawer, level=0):
-    """Abre o bolso da etiqueta na frente da gaveta.
+def _label_pocket(p, level=0):
+    """Bolso saliente do porta-etiqueta, pronto para unir a frente da gaveta.
 
-    Sao dois cortes: o bolso, aberto no verso (por onde a etiqueta entra), e a
-    janela frontal, menor, cuja moldura segura a etiqueta. O bolso atravessa
-    ate a cavidade das cartas, entao as proprias cartas empurram a etiqueta
-    contra a moldura.
+    E um bloco macico do qual se tira o vao do token (aberto em cima, por onde
+    ele entra) e a janela frontal, cuja moldura o segura. Nenhum corte chega a
+    atravessar a frente da gaveta.
     """
     zc = p.label_center_z(level)
+    zb = zc - p.label_h / 2               # base do vao: onde o token repousa
+    zt = zb + p.label_wall_h              # topo das paredes
+    front = -p.d_face                     # superficie da frente da gaveta
+    bury = 0.6                            # afunda na frente: uniao sem faces coplanares
 
-    pocket = box(
+    body = box(
         "label_pocket",
-        -p.label_w / 2, p.label_w / 2,
-        -p.label_depth, 1.0,                     # do verso ate dentro da bandeja
-        zc - p.label_h / 2, zc + p.label_h / 2,
+        -p.label_box_w / 2, p.label_box_w / 2,
+        front - p.label_out, front + bury,
+        zb - p.label_rim, zt,
     )
-    boolean(drawer, pocket)
 
+    # vao do token: aberto em cima e com o fundo na propria frente da gaveta
+    slot = box(
+        "label_slot",
+        -p.label_w / 2, p.label_w / 2,
+        front - p.label_slot, front + bury + 1.0,
+        zb, zt + 1.0,
+    )
+    boolean(body, slot)
+
+    # janela frontal: a moldura cobre laterais e base do token
     window = box(
         "label_window",
         -(p.label_w / 2 - p.label_lip), p.label_w / 2 - p.label_lip,
-        -p.d_face - 1.0, -p.label_depth,         # atravessa a moldura
-        zc - p.label_h / 2 + p.label_lip, zc + p.label_h / 2 - p.label_lip,
+        front - p.label_out - 1.0, front - p.label_slot,
+        zb + p.label_lip, zt + 1.0,
     )
-    boolean(drawer, window)
-    return drawer
+    boolean(body, window)
+    return body
 
 
 def _text_mesh(p, text, top_z):
@@ -630,11 +668,15 @@ def build_all(p, texts=None):
 
 
 def place_label(p, token, drawer_location=(0.0, 0.0, 0.0), level=0):
-    """Encaixa um token no bolso da gaveta indicada."""
+    """Encaixa um token no bolso da gaveta indicada.
+
+    O token e modelado deitado (espessura em Z); girado 90 graus em X ele fica
+    em pe, com o texto voltado para a frente, encostado na moldura.
+    """
     token.rotation_euler = (math.radians(90), 0.0, 0.0)
     token.location = (
         drawer_location[0],
-        drawer_location[1] - (p.label_depth - p.token_t),
+        drawer_location[1] - (p.d_face + p.label_slot - p.token_t),
         drawer_location[2] + p.label_center_z(level),
     )
     return token
@@ -703,7 +745,9 @@ def main(argv):
     print("\n=== Modulo de armazenamento de cartas ===")
     print(f"  externo do casco : {p.shell_w:.1f} x {p.shell_d:.1f} x {p.shell_h:.1f} mm"
           "  (largura x profundidade x altura)")
-    print(f"  com a frente     : profundidade total {p.shell_d + p.d_face:.1f} mm")
+    print(f"  com a frente     : profundidade total "
+          f"{p.shell_d + p.d_face + (p.label_out if labels else 0.0):.1f} mm "
+          f"(o puxador avanca outros {p.handle_out:.0f} mm)")
     print(f"  espaco por gaveta: {p.card_w:.1f} x {p.depth:.1f} x {p.card_h:.1f} mm")
     print(f"  capacidade       : ~{int(p.depth / 0.62)} cartas com sleeve duplo "
           f"(~{int(p.depth / 0.45)} com sleeve simples) por gaveta")
@@ -711,11 +755,11 @@ def main(argv):
           f"por lateral - abertura {p.g_open:.1f} mm, {p.g_depth:.1f} mm de "
           "profundidade")
     if labels:
-        print(f"  porta-etiqueta   : bolso {p.label_w:.1f} x {p.label_h:.1f} mm, "
-              f"janela {p.label_w - 2 * p.label_lip:.1f} x "
-              f"{p.label_h - 2 * p.label_lip:.1f} mm")
+        print(f"  porta-etiqueta   : bolso saliente {p.label_box_w:.1f} x "
+              f"{p.label_box_h:.1f} mm, avanca {p.label_out:.1f} mm da frente")
         print(f"  token            : {p.token_w:.1f} x {p.token_h:.1f} x "
-              f"{p.token_t:.1f} mm, texto {p.label_text_h:.1f} mm em relevo")
+              f"{p.token_t:.1f} mm, texto {p.label_text_h:.1f} mm em relevo, "
+              "entra por cima")
     print()
 
     for obj in parts:

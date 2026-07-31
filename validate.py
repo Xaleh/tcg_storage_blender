@@ -105,18 +105,27 @@ def main():
     print("\n=== Porta-etiqueta ===")
     check("porta-etiqueta cabe na frente da gaveta", *(
         lambda ok, why: (ok, why or "ok"))(*p.label_fits(0)))
-    check("token mais raso que o bolso",
-          p.token_t < p.label_depth,
-          f"token {p.token_t:.2f} mm x bolso {p.label_depth:.2f} mm")
+    check("token mais raso que o vao do bolso",
+          p.token_t < p.label_slot,
+          f"token {p.token_t:.2f} mm x vao {p.label_slot:.2f} mm")
     check("moldura segura o token",
           p.label_lip - p.label_clear / 2 >= 1.0,
           f"{p.label_lip - p.label_clear / 2:.2f} mm de sobreposicao por lado")
-    check("texto em relevo nao passa da frente da gaveta",
+    check("texto em relevo nao passa da frente do bolso",
           p.label_text_h < p.label_front,
           f"relevo {p.label_text_h:.1f} mm x moldura {p.label_front:.1f} mm")
-    check("janela abre dentro da cavidade das cartas",
-          p.label_w / 2 <= p.card_w / 2 and p.label_h <= p.card_h,
-          "a etiqueta entra por dentro da gaveta")
+    check("bolso aberto em cima (token entra deslizando, sem ponte)",
+          p.label_wall_h < p.token_h,
+          f"paredes {p.label_wall_h:.1f} mm x token {p.token_h:.1f} mm")
+    check("token sobra acima do bolso para poder ser puxado",
+          p.label_grip >= 1.5, f"{p.label_grip:.1f} mm de pega")
+    check("moldura ainda segura o token com folga de pega",
+          p.label_wall_h >= p.token_h * 0.7,
+          f"{p.label_wall_h / p.token_h * 100:.0f}% da altura retida")
+    check("bolso nao invade a lateral da frente da gaveta",
+          p.label_box_w <= p.shell_w - 2 * p.face_gap - 4.0,
+          f"bolso {p.label_box_w:.1f} mm x frente "
+          f"{p.shell_w - 2 * p.face_gap:.1f} mm")
 
     print("\n=== Colisoes reais (booleano) ===")
     # 1. gaveta fechada dentro do casco

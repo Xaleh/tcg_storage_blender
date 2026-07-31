@@ -26,7 +26,7 @@ se quiser uma união bem rígida.
 | | mm |
 |---|---|
 | Externo do casco (L × P × A) | 80 × 195 × 103,4 |
-| Profundidade total com a frente da gaveta | 198 |
+| Profundidade total com a frente e o porta-etiqueta | 200,6 (o puxador avança outros 16) |
 | Espaço interno por gaveta (L × P × A) | 70 × 190 × 95 |
 | Capacidade | ~306 cartas com sleeve duplo (~422 com sleeve simples) |
 | Parede do casco | 3,0 mm |
@@ -48,24 +48,27 @@ em qualquer outro, em qualquer das duas direções.
 
 ### Porta-etiqueta
 
-A frente da gaveta tem um bolso para um token de identificação trocável.
+A frente da gaveta tem um bolso **saliente**, aplicado por cima da porta (não a
+atravessa), para um token de identificação trocável.
 
 | | mm |
 |---|---|
-| Bolso | 56 × 16, com 1,8 de profundidade |
-| Janela visível (moldura) | 52 × 12 |
+| Bolso, externo | 59,2 × 15,3, avançando 2,6 da frente |
+| Vão do token | 56 × 16 × 1,8 |
 | Token | 55,7 × 15,7 × 1,6 |
-| Sobreposição da moldura | 1,85 mm por lado |
-| Texto em relevo | 0,6 mm |
+| Sobreposição da moldura | 1,85 por lado |
+| Texto em relevo | 0,6 |
 
-**Como troca:** o bolso é passante e abre para dentro da gaveta. Puxe a gaveta,
-empurre o token para fora por trás e encaixe outro. A moldura frontal impede que
-ele caia para a frente e, com a gaveta em uso, as próprias cartas o mantêm
-encostado nela. O token entra justo (0,3 mm de folga total) e tem as bordas
-quebradas em 0,3 mm para facilitar.
+**Como troca:** o bolso tem paredes nas laterais e embaixo e é **aberto em cima**
+— o token desce por ali, como um cartão entrando num porta-crachá. A moldura
+frontal o segura pela frente em 87% da altura, e ele sobra 2 mm acima do bolso,
+que é onde você pega para puxar. Não precisa abrir a gaveta nem desmontar nada.
 
-O texto fica 0,6 mm recuado em relação à frente da gaveta, então não sofre
-esbarrão e não atrapalha o empilhamento.
+Ser aberto em cima é também o que torna a peça fácil de imprimir: as paredes
+laterais são verticais e o fundo é um ressalto de só 2,6 mm, então **não existe
+nenhuma ponte** no porta-etiqueta.
+
+O texto fica 0,2 mm recuado em relação à frente do bolso, protegido de esbarrão.
 
 **Gerando tokens escritos:**
 
@@ -78,7 +81,9 @@ python tcg_storage.py --export \
 
 Cada `--label-text` gera um `stl/label_<texto>.stl`. O texto é dimensionado
 automaticamente para caber na janela. Para outra fonte, use
-`--label-font /caminho/para/fonte.ttf`. Para gavetas lisas, `--no-label`.
+`--label-font /caminho/para/fonte.ttf`. Para gavetas lisas, `--no-label`. Se
+preferir o token rente ao bolso em vez de sobrando 2 mm, ajuste `label_grip`
+na classe `Params`.
 
 Para ter contraste de cor como na foto de referência, imprima o token deitado e
 programe uma **troca de filamento na altura em que o relevo começa** (1,6 mm) —
@@ -161,9 +166,8 @@ python preview.py --out preview.png --stack 2
 - **Etiqueta:** deitada, texto para cima. Nessa posição o relevo sai limpo e é
   onde entra a troca de cor, se você quiser.
 
-A janela do porta-etiqueta faz uma ponte de 52 mm no topo, numa parede de 3 mm —
-é a mesma situação de qualquer furo retangular em parede vertical e sai limpa com
-bridging padrão.
+Nenhuma peça tem ponte: o maior balanço do projeto é o fundo do porta-etiqueta,
+com 2,6 mm.
 
 **Configuração sugerida:**
 
