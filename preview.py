@@ -14,7 +14,7 @@ import bpy  # noqa: I001
 import bmesh  # noqa: F401  (importado por consistencia com tcg_storage)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tcg_storage import Params, build_all, place_assembly  # noqa: E402
+from tcg_storage import Params, build_all, place_assembly, place_label  # noqa: E402
 
 
 def material(name, color, roughness=0.55):
@@ -40,6 +40,7 @@ def main(argv):
     ap.add_argument("--res", type=int, default=1100)
     ap.add_argument("--stack", type=int, default=2, help="modulos empilhados na cena")
     ap.add_argument("--open", type=float, default=110.0, help="quanto a gaveta abre (mm)")
+    ap.add_argument("--label", default="Dragonshields", help="texto da etiqueta")
     if "--" in argv:
         argv = argv[argv.index("--") + 1:]
     elif argv and os.path.basename(argv[0]).startswith("blender"):
@@ -49,7 +50,7 @@ def main(argv):
     args = ap.parse_args(argv)
 
     p = Params(drawers=args.drawers)
-    parts, shell, drawers, key = build_all(p)
+    parts, shell, drawers, key, labels = build_all(p, [args.label, "Commons"])
     place_assembly(p, shell, drawers, key, open_mm=args.open)
     # a chave flutua ao lado da junta entre dois modulos, na altura do sulco
     key.location = (-p.shell_w / 2 - 34.0, p.shell_d * 0.42, p.shell_h)
@@ -58,14 +59,18 @@ def main(argv):
     grey = material("pla_cinza", (0.62, 0.62, 0.63))
     accent = material("pla_gaveta", (0.72, 0.72, 0.74))
     keymat = material("pla_chave", (0.85, 0.42, 0.20), roughness=0.45)
+    labelmat = material("pla_etiqueta", (0.93, 0.93, 0.92), roughness=0.4)
 
     shell.data.materials.append(grey)
     for d in drawers:
         d.data.materials.append(accent)
     key.data.materials.append(keymat)
+    for token in labels:
+        token.data.materials.append(labelmat)
 
     # empilha copias do modulo para mostrar o encaixe
     step = p.shell_h
+    drawer_slots = [tuple(drawers[0].location)]
     for i in range(1, args.stack):
         c = shell.copy()
         c.data = shell.data
@@ -76,6 +81,15 @@ def main(argv):
             dc.data = d.data
             dc.location = (0.0, 0.0, d.location.z + i * step)
             bpy.context.collection.objects.link(dc)
+            if level == 0:
+                drawer_slots.append(tuple(dc.location))
+
+    # coloca um token em cada gaveta e deixa o em branco sobre a mesa
+    for token, slot in zip(labels[1:], reversed(drawer_slots)):
+        place_label(p, token, slot, 0)
+    if labels:
+        labels[0].location = (-p.shell_w / 2 - 60.0, -60.0, p.token_t / 2)
+        labels[0].rotation_euler = (0.0, 0.0, math.radians(-20))
 
     total_h = step * args.stack
 

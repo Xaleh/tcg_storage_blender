@@ -21,7 +21,7 @@ import bpy  # noqa: I001
 import bmesh
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tcg_storage import Params, build_all, mesh_report  # noqa: E402
+from tcg_storage import Params, build_all, mesh_report, place_label  # noqa: E402
 
 
 def volume_mm3(obj):
@@ -68,7 +68,7 @@ def intersection_volume(a, b):
 
 def main():
     p = Params()
-    parts, shell, drawers, key = build_all(p)
+    parts, shell, drawers, key, labels = build_all(p, ["Cheap sleeves"])
     drawer = drawers[0]
 
     failures = []
@@ -102,6 +102,22 @@ def main():
           math.degrees(math.atan2(p.g_flare, p.g_depth)) <= 45.5,
           f"{math.degrees(math.atan2(p.g_flare, p.g_depth)):.1f} graus")
 
+    print("\n=== Porta-etiqueta ===")
+    check("porta-etiqueta cabe na frente da gaveta", *(
+        lambda ok, why: (ok, why or "ok"))(*p.label_fits(0)))
+    check("token mais raso que o bolso",
+          p.token_t < p.label_depth,
+          f"token {p.token_t:.2f} mm x bolso {p.label_depth:.2f} mm")
+    check("moldura segura o token",
+          p.label_lip - p.label_clear / 2 >= 1.0,
+          f"{p.label_lip - p.label_clear / 2:.2f} mm de sobreposicao por lado")
+    check("texto em relevo nao passa da frente da gaveta",
+          p.label_text_h < p.label_front,
+          f"relevo {p.label_text_h:.1f} mm x moldura {p.label_front:.1f} mm")
+    check("janela abre dentro da cavidade das cartas",
+          p.label_w / 2 <= p.card_w / 2 and p.label_h <= p.card_h,
+          "a etiqueta entra por dentro da gaveta")
+
     print("\n=== Colisoes reais (booleano) ===")
     # 1. gaveta fechada dentro do casco
     drawer.location = (0.0, 0.0, p.cavity_z(0) + p.gap)
@@ -127,6 +143,16 @@ def main():
     v = intersection_volume(shell, key)
     check("chave desliza no sulco lateral", v < 1e-3, f"{v:.4f} mm3")
     key.rotation_euler = (0.0, 0.0, 0.0)
+
+    # 4b. tokens encaixados no bolso da gaveta
+    drawer.location = (0.0, 0.0, p.cavity_z(0) + p.gap)
+    for token in labels:
+        place_label(p, token, drawer.location, 0)
+        v = intersection_volume(drawer, token)
+        check(f"'{token.name}' encaixa no bolso sem colidir", v < 1e-3,
+              f"{v:.4f} mm3")
+        v = intersection_volume(shell, token)
+        check(f"'{token.name}' nao encosta no casco", v < 1e-3, f"{v:.4f} mm3")
 
     # 5. dois modulos empilhados
     upper = duplicate(shell, "shell_upper", (0.0, 0.0, p.shell_h))

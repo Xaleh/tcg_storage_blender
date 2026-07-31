@@ -74,6 +74,22 @@ class Params:
         self.handle_t = 8.0       # espessura da aba
         self.handle_ramp = 16.0   # rampa inferior a 45 graus (auto-sustentavel)
 
+        # --- porta-etiqueta na frente da gaveta ------------------------------
+        # Bolso passante: a etiqueta entra pelo lado de dentro da gaveta e fica
+        # presa pela moldura frontal (as cartas a empurram contra a moldura).
+        self.label = True         # criar o porta-etiqueta
+        self.label_w = 56.0       # largura do bolso
+        self.label_h = 16.0       # altura do bolso
+        self.label_front = 1.2    # espessura da moldura frontal
+        self.label_lip = 2.0      # quanto a moldura cobre a etiqueta por lado
+        self.label_clear = 0.3    # folga da etiqueta no bolso (total)
+        self.label_z = None       # cota do centro (None = automatico)
+
+        # --- token de etiqueta ----------------------------------------------
+        self.label_text_h = 0.6   # altura do texto em relevo
+        self.label_margin = 1.5   # margem do texto dentro da janela
+        self.label_font = None    # caminho de um .ttf (None = fonte padrao)
+
         # --- chave de uniao -------------------------------------------------
         self.key_len = 60.0
 
@@ -146,6 +162,60 @@ class Params:
         else:
             b1 = self.s_wall + (level + 1) * (self.cav_h + self.shelf) - self.shelf / 2.0
         return b0 + self.face_gap, b1 - self.face_gap
+
+    @property
+    def label_depth(self):
+        """Profundidade do bolso, medida a partir do verso da frente."""
+        return self.d_face - self.label_front
+
+    @property
+    def token_w(self):
+        return self.label_w - self.label_clear
+
+    @property
+    def token_h(self):
+        return self.label_h - self.label_clear
+
+    @property
+    def token_t(self):
+        """Espessura do token: fica 0,2 mm mais raso que o bolso."""
+        return self.label_depth - 0.2
+
+    def face_span_local(self, level):
+        """`face_span` nas coordenadas locais da gaveta (fundo da bandeja = 0)."""
+        z0, z1 = self.face_span(level)
+        base = self.cavity_z(level) + self.gap
+        return z0 - base, z1 - base
+
+    def handle_span(self, fz0, fz1):
+        """(espessura da aba, topo, base) do puxador, em coordenadas locais."""
+        ht = min(self.handle_t, (fz1 - fz0) * 0.25)
+        top = fz1 - 4.0
+        return ht, top, top - ht - self.handle_ramp
+
+    def label_center_z(self, level=0):
+        """Cota local do centro do porta-etiqueta: meio da area livre abaixo
+        do puxador."""
+        if self.label_z is not None:
+            return self.label_z
+        fz0, fz1 = self.face_span_local(level)
+        _, _, handle_bottom = self.handle_span(fz0, fz1)
+        return (fz0 + handle_bottom) / 2.0
+
+    def label_fits(self, level=0):
+        """(cabe?, motivo) - confere se o bolso cabe na frente desta gaveta."""
+        fz0, fz1 = self.face_span_local(level)
+        _, _, handle_bottom = self.handle_span(fz0, fz1)
+        free = handle_bottom - fz0
+        if self.label_w + 8.0 > self.shell_w - 2 * self.face_gap:
+            return False, "largura da frente insuficiente"
+        if self.label_h + 4.0 > free:
+            return False, "altura livre abaixo do puxador insuficiente"
+        if self.label_front < 0.8:
+            return False, "moldura frontal fina demais"
+        if self.label_lip < 1.0:
+            return False, "aba da moldura pequena demais"
+        return True, ""
 
     def groove_centers_top(self):
         """Posicoes X dos sulcos das faces superior/inferior."""
@@ -391,8 +461,7 @@ def build_drawer(p, level=0, name=None):
         add_bevel(face, p.bevel, segments=2)
 
     # puxador: aba com rampa inferior a 45 graus (imprime sem suporte)
-    ht = min(p.handle_t, (fz1 - fz0) * 0.25)
-    top = fz1 - 4.0
+    ht, top, _ = p.handle_span(fz0, fz1)
     y_out = -p.d_face - p.handle_out
     profile = [
         (-p.d_face, top),
@@ -405,8 +474,117 @@ def build_drawer(p, level=0, name=None):
 
     boolean(tray, face, "UNION")
     boolean(tray, handle, "UNION")
+
+    if p.label:
+        ok, why = p.label_fits(level)
+        if ok:
+            _cut_label_pocket(p, tray, level)
+        else:
+            print(f"  aviso: porta-etiqueta omitido em {name} ({why})")
+
     tray.name = name
     return tray
+
+
+def _cut_label_pocket(p, drawer, level=0):
+    """Abre o bolso da etiqueta na frente da gaveta.
+
+    Sao dois cortes: o bolso, aberto no verso (por onde a etiqueta entra), e a
+    janela frontal, menor, cuja moldura segura a etiqueta. O bolso atravessa
+    ate a cavidade das cartas, entao as proprias cartas empurram a etiqueta
+    contra a moldura.
+    """
+    zc = p.label_center_z(level)
+
+    pocket = box(
+        "label_pocket",
+        -p.label_w / 2, p.label_w / 2,
+        -p.label_depth, 1.0,                     # do verso ate dentro da bandeja
+        zc - p.label_h / 2, zc + p.label_h / 2,
+    )
+    boolean(drawer, pocket)
+
+    window = box(
+        "label_window",
+        -(p.label_w / 2 - p.label_lip), p.label_w / 2 - p.label_lip,
+        -p.d_face - 1.0, -p.label_depth,         # atravessa a moldura
+        zc - p.label_h / 2 + p.label_lip, zc + p.label_h / 2 - p.label_lip,
+    )
+    boolean(drawer, window)
+    return drawer
+
+
+def _text_mesh(p, text, top_z):
+    """Malha do texto em relevo, centrada na origem, apoiada em z = top_z."""
+    from mathutils import Matrix
+
+    bpy.ops.object.text_add(location=(0.0, 0.0, top_z))
+    obj = bpy.context.object
+    obj.name = "label_text"
+    obj.data.body = text
+    obj.data.align_x = "CENTER"
+    obj.data.align_y = "CENTER"
+    # extrusao simetrica: metade sobe (relevo) e metade afunda na placa,
+    # garantindo interseccao solida para a uniao booleana.
+    obj.data.extrude = p.label_text_h
+    if p.label_font:
+        obj.data.font = bpy.data.fonts.load(p.label_font)
+
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.convert(target="MESH")
+    obj = bpy.context.object
+
+    # encaixa o texto na janela visivel da moldura
+    win_w = p.label_w - 2 * p.label_lip - 2 * p.label_margin
+    win_h = p.label_h - 2 * p.label_lip - 2 * p.label_margin
+    dim = obj.dimensions
+    if dim.x > 1e-6 and dim.y > 1e-6:
+        s = min(win_w / dim.x, win_h / dim.y)
+        obj.scale = (s, s, 1.0)
+        bpy.ops.object.select_all(action="DESELECT")
+        obj.select_set(True)
+        bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+
+    # recentraliza pelo bounding box real (acentos e descidas desalinham)
+    bb = obj.bound_box
+    cx = (min(v[0] for v in bb) + max(v[0] for v in bb)) / 2.0
+    cy = (min(v[1] for v in bb) + max(v[1] for v in bb)) / 2.0
+    obj.data.transform(Matrix.Translation((-cx, -cy, 0.0)))
+    return obj
+
+
+def slugify(text):
+    """Nome de arquivo a partir do texto da etiqueta."""
+    out = []
+    for ch in text.lower():
+        out.append(ch if ch.isalnum() else "_")
+    slug = "".join(out).strip("_")
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    return slug or "token"
+
+
+def build_label(p, text=None, name=None):
+    """Token de etiqueta, deitado (espessura em Z) - ja na posicao de impressao.
+
+    Com `text`, o texto sai em relevo na face de cima; imprima com troca de
+    filamento na altura do relevo para ter contraste de cor.
+    """
+    name = name or ("label" if not text else f"label_{slugify(text)}")
+
+    plate = box(
+        name,
+        -p.token_w / 2, p.token_w / 2,
+        -p.token_h / 2, p.token_h / 2,
+        0.0, p.token_t,
+    )
+    add_bevel(plate, 0.3, segments=1)      # quebra as bordas: entra mais facil
+
+    if text:
+        boolean(plate, _text_mesh(p, text, p.token_t), "UNION")
+
+    plate.name = name
+    return plate
 
 
 def build_key(p):
@@ -433,15 +611,33 @@ def export_stl(obj, path):
     obj.select_set(False)
 
 
-def build_all(p):
-    """Constroi as pecas e devolve (lista_de_pecas, shell, gavetas)."""
+def build_all(p, texts=None):
+    """Constroi as pecas e devolve (pecas, casco, gavetas, chave, etiquetas)."""
     clear_scene()
     setup_units()
 
     shell = build_shell(p)
     drawers = [build_drawer(p, level) for level in range(p.drawers)]
     key = build_key(p)
-    return [shell] + drawers + [key], shell, drawers, key
+
+    labels = []
+    if p.label and p.label_fits(0)[0]:
+        labels.append(build_label(p))                 # token em branco
+        for text in (texts or []):
+            labels.append(build_label(p, text))
+
+    return [shell] + drawers + [key] + labels, shell, drawers, key, labels
+
+
+def place_label(p, token, drawer_location=(0.0, 0.0, 0.0), level=0):
+    """Encaixa um token no bolso da gaveta indicada."""
+    token.rotation_euler = (math.radians(90), 0.0, 0.0)
+    token.location = (
+        drawer_location[0],
+        drawer_location[1] - (p.label_depth - p.token_t),
+        drawer_location[2] + p.label_center_z(level),
+    )
+    return token
 
 
 def place_assembly(p, shell, drawers, key, open_mm=90.0):
@@ -470,6 +666,13 @@ def main(argv):
     ap.add_argument("--key-clear", type=float,
                     help="folga da chave no sulco, por face (mm); menor = mais firme")
     ap.add_argument("--bevel", type=float, help="chanfro das arestas externas (0 desliga)")
+    ap.add_argument("--label-text", action="append", metavar="TEXTO",
+                    help="gera um token com esse texto em relevo (pode repetir)")
+    ap.add_argument("--label-w", type=float, help="largura do porta-etiqueta (mm)")
+    ap.add_argument("--label-h", type=float, help="altura do porta-etiqueta (mm)")
+    ap.add_argument("--label-font", metavar="TTF", help="fonte do texto do token")
+    ap.add_argument("--no-label", action="store_true",
+                    help="gaveta lisa, sem porta-etiqueta")
     ap.add_argument("--out", default="stl", help="pasta de saida dos STL")
     ap.add_argument("--export", action="store_true", help="exportar STL")
     ap.add_argument("--save-blend", metavar="ARQUIVO", help="salvar arquivo .blend")
@@ -490,10 +693,12 @@ def main(argv):
         card_w=args.card_w, card_h=args.card_h, depth=args.depth,
         drawers=args.drawers, gap=args.gap, s_wall=args.s_wall,
         d_wall=args.d_wall, key_len=args.key_len, bevel=args.bevel,
-        key_clear=args.key_clear,
+        key_clear=args.key_clear, label_w=args.label_w, label_h=args.label_h,
+        label_font=args.label_font,
+        label=(False if args.no_label else None),
     )
 
-    parts, shell, drawers, key = build_all(p)
+    parts, shell, drawers, key, labels = build_all(p, args.label_text)
 
     print("\n=== Modulo de armazenamento de cartas ===")
     print(f"  externo do casco : {p.shell_w:.1f} x {p.shell_d:.1f} x {p.shell_h:.1f} mm"
@@ -504,7 +709,14 @@ def main(argv):
           f"(~{int(p.depth / 0.45)} com sleeve simples) por gaveta")
     print(f"  sulcos           : {p.grooves_top} no topo/base, {p.grooves_side} "
           f"por lateral - abertura {p.g_open:.1f} mm, {p.g_depth:.1f} mm de "
-          "profundidade\n")
+          "profundidade")
+    if labels:
+        print(f"  porta-etiqueta   : bolso {p.label_w:.1f} x {p.label_h:.1f} mm, "
+              f"janela {p.label_w - 2 * p.label_lip:.1f} x "
+              f"{p.label_h - 2 * p.label_lip:.1f} mm")
+        print(f"  token            : {p.token_w:.1f} x {p.token_h:.1f} x "
+              f"{p.token_t:.1f} mm, texto {p.label_text_h:.1f} mm em relevo")
+    print()
 
     for obj in parts:
         vol, bad = mesh_report(obj)
@@ -526,12 +738,17 @@ def main(argv):
 
     if args.assembly:
         place_assembly(p, shell, drawers, key)
+        if labels:
+            place_label(p, labels[-1], drawers[0].location, 0)
     else:
         gap = 20.0
         shell.location = (0.0, 0.0, 0.0)
         for i, drw in enumerate(drawers):
             drw.location = (p.shell_w + gap, 0.0, i * (p.drawer_h + gap))
         key.location = (-p.shell_w / 2 - gap, p.shell_d / 2, 0.0)
+        for i, token in enumerate(labels):
+            token.location = (-p.shell_w / 2 - gap, p.shell_d / 2 + 40.0,
+                              i * (p.label_h + 6.0))
 
     if args.save_blend:
         bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(args.save_blend))
