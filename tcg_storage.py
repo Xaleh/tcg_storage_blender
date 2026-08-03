@@ -62,9 +62,14 @@ class Params:
         self.key_clear = 0.2      # folga da chave dentro do sulco (por face)
 
         # --- sulcos de encaixe (rabo de andorinha, flancos a 45 graus) ------
-        self.g_open = 6.0         # largura na superficie
-        self.g_depth = 1.6        # profundidade do sulco
-        self.g_flare = 1.6        # alargamento por lado no fundo (45 graus)
+        # A profundidade e limitada pela parede do casco: validate.py exige
+        # `s_wall - g_depth >= 1.2` de material atras do sulco, o que com
+        # s_wall = 3,0 permite no maximo 1,8. Para um encaixe mais fundo,
+        # aumente `--s-wall` junto. A largura nao tem esse teto - o limite
+        # dela e nao encostar no sulco vizinho (tambem verificado).
+        self.g_open = 14.0        # largura na superficie
+        self.g_depth = 1.8        # profundidade do sulco
+        self.g_flare = 1.8        # alargamento por lado no fundo (45 graus)
         self.grooves_top = 2      # sulcos no topo e na base
         self.grooves_side = 3     # sulcos em cada lateral
 
@@ -682,21 +687,53 @@ def place_label(p, token, drawer_location=(0.0, 0.0, 0.0), level=0):
     return token
 
 
+def place_key(p, key, face="top", index=0, out_mm=0.0, base_z=0.0, side=+1):
+    """Encaixa a chave num sulco do casco (mesma transformacao que validate.py).
+
+    `face="top"` usa a face de cima, em `base_z + shell_h`. Como o perfil da
+    chave e simetrico e as faces de cima e de baixo usam as mesmas posicoes de
+    sulco, a chave ali fica encaixada nos dois modulos de uma pilha ao mesmo
+    tempo - ela e a junta. `face="side"` usa uma lateral (`side` = +1 direita,
+    -1 esquerda), que e como se unem dois modulos lado a lado.
+
+    `out_mm` e quanto ela sobra para fora da frente do casco: com 0 fica rente,
+    com um valor positivo mostra a chave a meio caminho de entrar no sulco.
+    """
+    y = p.key_len / 2.0 - out_mm
+    if face == "top":
+        centers = p.groove_centers_top()
+        key.rotation_euler = (0.0, 0.0, 0.0)
+        key.location = (centers[index % len(centers)], y, base_z + p.shell_h)
+    else:
+        centers = p.groove_centers_side()
+        key.rotation_euler = (0.0, math.radians(90), 0.0)
+        key.location = (side * p.shell_w / 2.0, y,
+                        base_z + centers[index % len(centers)])
+    return key
+
+
 def place_assembly(p, shell, drawers, key, open_mm=90.0):
-    """Posiciona as pecas montadas (a primeira gaveta fica aberta)."""
+    """Posiciona as pecas montadas (a primeira gaveta fica aberta).
+
+    A frente do casco e y = 0 e a gaveta ocupa y >= 0 quando fechada, entao
+    abrir e andar no -y.
+    """
     for level, drw in enumerate(drawers):
         drw.location = (
             0.0,
-            (open_mm if level == 0 else 0.0),
+            (-open_mm if level == 0 else 0.0),
             p.cavity_z(level) + p.gap,
         )
-    key.rotation_euler = (0.0, 0.0, 0.0)
-    key.location = (p.shell_w / 2 + 30.0, p.shell_d / 2, p.shell_h / 2)
+    place_key(p, key)
 
 
-def main(argv):
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+def add_param_args(ap):
+    """Registra as flags que mexem em `Params`.
+
+    Ficam separadas das flags de acao (--export, --out, ...) porque validate.py
+    tambem precisa delas: sem isso ele so conseguiria conferir a configuracao
+    padrao, justo depois de voce mudar alguma cota.
+    """
     ap.add_argument("--card-w", type=float, help="largura interna da gaveta (mm)")
     ap.add_argument("--card-h", type=float, help="altura interna da gaveta (mm)")
     ap.add_argument("--depth", type=float, help="profundidade util da gaveta (mm)")
@@ -707,6 +744,15 @@ def main(argv):
     ap.add_argument("--key-len", type=float, help="comprimento da chave de uniao (mm)")
     ap.add_argument("--key-clear", type=float,
                     help="folga da chave no sulco, por face (mm); menor = mais firme")
+    ap.add_argument("--g-open", type=float,
+                    help="largura do rabo de andorinha na superficie (mm)")
+    ap.add_argument("--g-depth", type=float,
+                    help="profundidade do sulco (mm); exige s_wall - g_depth >= 1.2")
+    ap.add_argument("--g-flare", type=float,
+                    help="alargamento do sulco por lado no fundo (mm); "
+                         "igual a g_depth = flanco a 45 graus")
+    ap.add_argument("--grooves-top", type=int, help="sulcos no topo e na base")
+    ap.add_argument("--grooves-side", type=int, help="sulcos em cada lateral")
     ap.add_argument("--bevel", type=float, help="chanfro das arestas externas (0 desliga)")
     ap.add_argument("--label-text", action="append", metavar="TEXTO",
                     help="gera um token com esse texto em relevo (pode repetir)")
@@ -715,30 +761,48 @@ def main(argv):
     ap.add_argument("--label-font", metavar="TTF", help="fonte do texto do token")
     ap.add_argument("--no-label", action="store_true",
                     help="gaveta lisa, sem porta-etiqueta")
+    return ap
+
+
+def params_from_args(args):
+    """`Params` a partir do que `add_param_args` coletou (None = padrao)."""
+    return Params(
+        card_w=args.card_w, card_h=args.card_h, depth=args.depth,
+        drawers=args.drawers, gap=args.gap, s_wall=args.s_wall,
+        d_wall=args.d_wall, key_len=args.key_len, bevel=args.bevel,
+        key_clear=args.key_clear, label_w=args.label_w, label_h=args.label_h,
+        label_font=args.label_font,
+        g_open=args.g_open, g_depth=args.g_depth, g_flare=args.g_flare,
+        grooves_top=args.grooves_top, grooves_side=args.grooves_side,
+        label=(False if args.no_label else None),
+    )
+
+
+def strip_argv(argv):
+    """Argumentos do script, vindo do Blender ou do Python direto.
+
+    `blender --background --python x.py -- <args>` passa tudo em sys.argv;
+    `python x.py <args>` passa o nome do script em argv[0].
+    """
+    if "--" in argv:
+        return argv[argv.index("--") + 1:]
+    if argv and os.path.basename(argv[0]).startswith("blender"):
+        return []
+    return argv[1:]
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_param_args(ap)
     ap.add_argument("--out", default="stl", help="pasta de saida dos STL")
     ap.add_argument("--export", action="store_true", help="exportar STL")
     ap.add_argument("--save-blend", metavar="ARQUIVO", help="salvar arquivo .blend")
     ap.add_argument("--assembly", action="store_true",
                     help="deixar a cena montada em vez de lado a lado")
 
-    # `blender --background --python x.py -- <args>` passa tudo em sys.argv;
-    # `python x.py <args>` passa o nome do script em argv[0].
-    if "--" in argv:
-        argv = argv[argv.index("--") + 1:]
-    elif argv and os.path.basename(argv[0]).startswith("blender"):
-        argv = []
-    else:
-        argv = argv[1:]
-    args = ap.parse_args(argv)
-
-    p = Params(
-        card_w=args.card_w, card_h=args.card_h, depth=args.depth,
-        drawers=args.drawers, gap=args.gap, s_wall=args.s_wall,
-        d_wall=args.d_wall, key_len=args.key_len, bevel=args.bevel,
-        key_clear=args.key_clear, label_w=args.label_w, label_h=args.label_h,
-        label_font=args.label_font,
-        label=(False if args.no_label else None),
-    )
+    args = ap.parse_args(strip_argv(argv))
+    p = params_from_args(args)
 
     parts, shell, drawers, key, labels = build_all(p, args.label_text)
 
@@ -752,8 +816,8 @@ def main(argv):
     print(f"  capacidade       : ~{int(p.depth / 0.62)} cartas com sleeve duplo "
           f"(~{int(p.depth / 0.45)} com sleeve simples) por gaveta")
     print(f"  sulcos           : {p.grooves_top} no topo/base, {p.grooves_side} "
-          f"por lateral - abertura {p.g_open:.1f} mm, {p.g_depth:.1f} mm de "
-          "profundidade")
+          f"por lateral - {p.g_open:.1f} mm na superficie, {p.g_bottom:.1f} mm "
+          f"no fundo, {p.g_depth:.1f} mm de profundidade")
     if labels:
         print(f"  porta-etiqueta   : bolso saliente {p.label_box_w:.1f} x "
               f"{p.label_box_h:.1f} mm, avanca {p.label_out:.1f} mm da frente")

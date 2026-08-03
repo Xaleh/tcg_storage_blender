@@ -8,11 +8,15 @@ Confere, por interseccao booleana real, que as pecas encaixam sem colidir:
   * dois modulos empilhados nao se interpenetram;
   * todas as malhas sao fechadas (manifold).
 
+Aceita as mesmas flags de cota do tcg_storage.py, para conferir a configuracao
+que voce vai imprimir e nao so a padrao.
+
 Uso:
     blender --background --python validate.py
-    python validate.py            (com o modulo `bpy` instalado)
+    blender --background --python validate.py -- --g-open 18 --drawers 3
 """
 
+import argparse
 import math
 import os
 import sys
@@ -21,7 +25,10 @@ import bpy  # noqa: I001
 import bmesh
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tcg_storage import Params, build_all, mesh_report, place_label  # noqa: E402
+from tcg_storage import (  # noqa: E402
+    add_param_args, build_all, mesh_report, params_from_args, place_label,
+    strip_argv,
+)
 
 
 def volume_mm3(obj):
@@ -66,9 +73,15 @@ def intersection_volume(a, b):
     return vol
 
 
-def main():
-    p = Params()
-    parts, shell, drawers, key, labels = build_all(p, ["Cheap sleeves"])
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_param_args(ap)
+    args = ap.parse_args(strip_argv(list(argv if argv is not None else sys.argv)))
+
+    p = params_from_args(args)
+    parts, shell, drawers, key, labels = build_all(
+        p, args.label_text or ["Cheap sleeves"])
     drawer = drawers[0]
 
     failures = []
@@ -101,6 +114,15 @@ def main():
     check("flancos do rabo de andorinha imprimivel (<= 45 graus)",
           math.degrees(math.atan2(p.g_flare, p.g_depth)) <= 45.5,
           f"{math.degrees(math.atan2(p.g_flare, p.g_depth)):.1f} graus")
+    # sulcos largos demais se encostariam, virando um rasgo unico: a malha
+    # continua fechada e a chave continua entrando, entao so uma conta pega.
+    for face, total, count in (("topo/base", p.shell_w, p.grooves_top),
+                               ("lateral", p.shell_h, p.grooves_side)):
+        step = total / (count + 1.0)
+        check(f"sulcos da face {face} nao se encostam",
+              p.g_bottom + 2.0 <= step,
+              f"fundo {p.g_bottom:.1f} mm x passo {step:.1f} mm "
+              f"({step - p.g_bottom:.1f} mm entre sulcos)")
 
     print("\n=== Porta-etiqueta ===")
     check("porta-etiqueta cabe na frente da gaveta", *(

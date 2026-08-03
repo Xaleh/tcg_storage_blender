@@ -2,7 +2,7 @@
 
 Uso:
     blender --background --python preview.py -- --out preview.png
-    python preview.py --out preview.png        (com o modulo `bpy` instalado)
+    blender --background --python preview.py -- --stack 3 --samples 128
 """
 
 import argparse
@@ -12,9 +12,12 @@ import sys
 
 import bpy  # noqa: I001
 import bmesh  # noqa: F401  (importado por consistencia com tcg_storage)
+import mathutils
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tcg_storage import Params, build_all, place_assembly, place_label  # noqa: E402
+from tcg_storage import (  # noqa: E402
+    Params, build_all, place_assembly, place_key, place_label, strip_argv,
+)
 
 
 def material(name, color, roughness=0.55):
@@ -27,9 +30,49 @@ def material(name, color, roughness=0.55):
 
 
 def look_at(obj, target):
-    import mathutils
     direction = mathutils.Vector(target) - obj.location
     obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+
+
+def scene_bounds():
+    """(centro, 8 cantos) da caixa que envolve o que ja esta na cena.
+
+    A gaveta aberta e a chave meio encaixada avancam bem para fora do casco,
+    entao enquadrar pelas cotas do modulo corta a imagem: e o conteudo real que
+    manda. Chame antes de acrescentar chao, luzes e camera.
+    """
+    bpy.context.view_layer.update()
+    pts = [
+        obj.matrix_world @ mathutils.Vector(c)
+        for obj in bpy.context.scene.objects if obj.type == "MESH"
+        for c in obj.bound_box
+    ]
+    lo = mathutils.Vector([min(q[i] for q in pts) for i in range(3)])
+    hi = mathutils.Vector([max(q[i] for q in pts) for i in range(3)])
+    corners = [mathutils.Vector((x, y, z))
+               for x in (lo.x, hi.x) for y in (lo.y, hi.y) for z in (lo.z, hi.z)]
+    return (lo + hi) / 2.0, corners
+
+
+def fit_distance(center, corners, direction, lens, aspect, margin=1.03):
+    """Distancia em `direction` que faz todos os cantos caberem no quadro.
+
+    Com a camera em `center + direction * d`, um ponto v = canto - center cai
+    dentro do quadro quando |v.R| <= (v.F + d) * tx e |v.U| <= (v.F + d) * ty
+    (R/U/F = eixos da camera, tx/ty = tangentes das meias aberturas). Basta
+    isolar d e ficar com o maior valor exigido.
+    """
+    fwd = -mathutils.Vector(direction).normalized()
+    right = fwd.cross(mathutils.Vector((0.0, 0.0, 1.0))).normalized()
+    up = right.cross(fwd)
+    tx = 18.0 / lens                  # sensor padrao de 36 mm na maior dimensao
+    ty = tx * aspect
+    need = 0.0
+    for c in corners:
+        v = c - center
+        need = max(need, abs(v.dot(right)) / tx - v.dot(fwd),
+                   abs(v.dot(up)) / ty - v.dot(fwd))
+    return need * margin
 
 
 def main(argv):
@@ -41,20 +84,13 @@ def main(argv):
     ap.add_argument("--stack", type=int, default=2, help="modulos empilhados na cena")
     ap.add_argument("--open", type=float, default=110.0, help="quanto a gaveta abre (mm)")
     ap.add_argument("--label", default="Dragonshields", help="texto da etiqueta")
-    if "--" in argv:
-        argv = argv[argv.index("--") + 1:]
-    elif argv and os.path.basename(argv[0]).startswith("blender"):
-        argv = []
-    else:
-        argv = argv[1:]
-    args = ap.parse_args(argv)
+    args = ap.parse_args(strip_argv(argv))
 
     p = Params(drawers=args.drawers)
     parts, shell, drawers, key, labels = build_all(p, [args.label, "Commons"])
     place_assembly(p, shell, drawers, key, open_mm=args.open)
-    # a chave flutua ao lado da junta entre dois modulos, na altura do sulco
-    key.location = (-p.shell_w / 2 - 34.0, p.shell_d * 0.42, p.shell_h)
-    key.rotation_euler = (0.0, 0.0, 0.0)
+    # chave a meio caminho de entrar num sulco lateral, que e o que a camera ve
+    place_key(p, key, face="side", index=0, side=-1, out_mm=p.key_len * 0.55)
 
     grey = material("pla_cinza", (0.62, 0.62, 0.63))
     accent = material("pla_gaveta", (0.72, 0.72, 0.74))
@@ -93,6 +129,16 @@ def main(argv):
 
     total_h = step * args.stack
 
+    # segunda chave, alinhada com um sulco do topo e ainda por encaixar: mostra
+    # a peca inteira e onde ela entra na hora de empilhar mais um modulo
+    key_up = key.copy()
+    key_up.data = key.data
+    bpy.context.collection.objects.link(key_up)
+    place_key(p, key_up, face="top", index=1, base_z=max(args.stack - 1, 0) * step)
+    key_up.location.z += 26.0
+
+    center, corners = scene_bounds()
+
     # chao
     bpy.ops.mesh.primitive_plane_add(size=2000, location=(0, p.shell_d / 2, -0.1))
     floor = bpy.context.object
@@ -103,27 +149,29 @@ def main(argv):
     key_light = bpy.context.object
     key_light.data.energy = 6.0e6
     key_light.data.size = 400
-    look_at(key_light, (0, p.shell_d / 2, total_h / 2))
+    look_at(key_light, center)
 
     bpy.ops.object.light_add(type="AREA", location=(420, -120, 260))
     fill = bpy.context.object
     fill.data.energy = 1.6e6
     fill.data.size = 500
-    look_at(fill, (0, p.shell_d / 2, total_h / 2))
+    look_at(fill, center)
 
     world = bpy.context.scene.world
     world.use_nodes = True
     world.node_tree.nodes["Background"].inputs[0].default_value = (0.05, 0.05, 0.06, 1)
     world.node_tree.nodes["Background"].inputs[1].default_value = 1.0
 
-    # camera
-    reach = max(total_h, p.shell_d) * 2.0
-    bpy.ops.object.camera_add(
-        location=(-reach * 0.70, -reach * 0.90, total_h * 0.60 + reach * 0.22)
-    )
+    # camera na diagonal frente-esquerda, de onde se veem a frente, a lateral
+    # com os sulcos e o topo; a distancia sai do proprio conteudo da cena
+    lens = 55.0
+    aspect = 0.78                      # altura / largura do render
+    direction = mathutils.Vector((-0.60, -0.72, 0.34)).normalized()
+    dist = fit_distance(center, corners, direction, lens, aspect)
+    bpy.ops.object.camera_add(location=center + direction * dist)
     cam = bpy.context.object
-    cam.data.lens = 55
-    look_at(cam, (0, p.shell_d * 0.38, total_h * 0.42))
+    cam.data.lens = lens
+    look_at(cam, center)
     bpy.context.scene.camera = cam
 
     scene = bpy.context.scene
@@ -132,7 +180,7 @@ def main(argv):
     scene.cycles.samples = args.samples
     scene.cycles.use_denoising = True
     scene.render.resolution_x = args.res
-    scene.render.resolution_y = int(args.res * 0.78)
+    scene.render.resolution_y = int(args.res * aspect)
     scene.render.film_transparent = False
     scene.render.filepath = os.path.abspath(args.out)
     bpy.ops.render.render(write_still=True)
